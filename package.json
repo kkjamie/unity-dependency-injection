@@ -1,0 +1,11 @@
+{
+  "name": "com.kkjamie.unity-dependency-injection",
+  "displayName": "UnityDependencyInjection",
+  "version": "1.0.0",
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kkjamie/unity-dependency-injection"
+  },
+  "author": "Jamie Healey"
+}
