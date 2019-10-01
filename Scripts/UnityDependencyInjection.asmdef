@@ -1,3 +1,8 @@
+<<<<<<< Updated upstream
 {
   "name": "UnityDependencyInjection"
+=======
+﻿{
+	"name": "UnityDependencyInjection"
+>>>>>>> Stashed changes
 }
