@@ -37,70 +37,61 @@ namespace UnityDependencyInjection
 				.ToArray();
 		}
 
-		private readonly List<object> dependencies = new List<object>();
+		private readonly Dictionary<Type, object> dependencies = new Dictionary<Type, object>();
 
 		public DependencyContainer()
 		{
-			dependencies.Add(this);
+			Add(this);
 		}
 
-		public DependencyContainer Add(params object[] dependenciesToAdd)
+		public void Add(object obj)
 		{
-			for (var i = 0; i < dependenciesToAdd.Length; i++)
-			{
-				var dependency = dependenciesToAdd[i];
-				if (dependency == null)
-				{
-					throw new Exception($"Cannot add a null dependency to the container, index {i}");
-				}
+			var type = obj.GetType();
 
-				dependencies.Add(dependency);
+			if (dependencies.ContainsKey(type))
+			{
+				throw new Exception("Object of this type already exists in the dependency container");
 			}
 
-			return this;
+			dependencies.Add(type, obj);
+		}
+
+		public T GetDependency<T>() where T : class
+		{
+			return GetDependency(typeof(T)) as T;
 		}
 
 		public object GetDependency(Type type)
 		{
+			if (dependencies.ContainsKey(type))
+			{
+				return dependencies[type];
+			}
+
+			return dependencies.FirstOrDefault(kvp => type.IsAssignableFrom(kvp.Key)).Value;
+		}
+
+		public IEnumerable<T> GetDependencies<T>() where T : class
+		{
+			var result = new List<T>();
+
 			foreach (var dependency in dependencies)
 			{
-				if (type.IsInstanceOfType(dependency))
+				var typedDependency = dependency.Value as T;
+				if (typedDependency != null)
 				{
-					return dependency;
+					result.Add(typedDependency);
 				}
 			}
 
-			return null;
-		}
-
-		public T GetDependency<T>()
-		{
-			return (T)GetDependency(typeof(T));
+			return result;
 		}
 
 		public void SelfInject()
 		{
-			foreach (var dependency in dependencies)
+			foreach (var dependency in dependencies.Values)
 			{
 				InjectTo(dependency);
-			}
-		}
-
-		public void InjectToSceneObjects()
-		{
-			foreach (var injectable in injectableMonoBehaviours)
-			{
-				var injectableObjects = Object.FindObjectsOfType(injectable.MonoBehaviourType);
-				foreach (var injectableObject in injectableObjects)
-				{
-					if (injectableObject.GetType() != injectable.MonoBehaviourType) continue;
-					if (dependencies.Contains(injectableObject)) continue;
-
-					injectable.Inject(injectableObject, this);
-
-					var handler = injectableObject as IDependencyInjectionCompleteHandler;
-					handler?.HandleDependencyInjectionComplete();
-				}
 			}
 		}
 
@@ -133,6 +124,25 @@ namespace UnityDependencyInjection
 			handler?.HandleDependencyInjectionComplete();
 		}
 
+		public void InjectToSceneObjects()
+		{
+			foreach (var injectable in injectableMonoBehaviours)
+			{
+				var injectableObjects = Object.FindObjectsOfType(injectable.MonoBehaviourType);
+				foreach (var injectableObject in injectableObjects)
+				{
+					if (injectableObject.GetType() != injectable.MonoBehaviourType) continue;
+					// Special case to stop re-injecting to things in the pool
+					if (dependencies.Values.Contains(injectableObject)) continue;
+
+					injectable.Inject(injectableObject, this);
+
+					var handler = injectableObject as IDependencyInjectionCompleteHandler;
+					handler?.HandleDependencyInjectionComplete();
+				}
+			}
+		}
+
 		public void InjectToGameObject(GameObject gameObject, bool includeChildren = true)
 		{
 			foreach (var injectable in injectableMonoBehaviours)
@@ -145,7 +155,7 @@ namespace UnityDependencyInjection
 
 				foreach (var injectableObject in components)
 				{
-					if (dependencies.Contains(injectableObject)) continue;
+					if (dependencies.Values.Contains(injectableObject)) continue;
 
 					injectable.Inject(injectableObject, this);
 
@@ -174,7 +184,7 @@ namespace UnityDependencyInjection
 
 		public void Destroy()
 		{
-			foreach (var dependency in dependencies)
+			foreach (var dependency in dependencies.Values)
 			{
 				var destructionHandler = dependency as IDependencyDestructionHandler;
 				destructionHandler?.HandleDependenciesDestroyed();
