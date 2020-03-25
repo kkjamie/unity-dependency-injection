@@ -128,6 +128,8 @@ namespace UnityDependencyInjection
 		{
 			foreach (var injectable in injectableMonoBehaviours)
 			{
+				if (injectable.IgnoreSceneInjection) continue;
+
 				var injectableObjects = Object.FindObjectsOfType(injectable.MonoBehaviourType);
 				foreach (var injectableObject in injectableObjects)
 				{
@@ -197,9 +199,11 @@ namespace UnityDependencyInjection
 		{
 			public Type MonoBehaviourType { get; private set; }
 			public IEnumerable<FieldInfo> InjectableFields { get; }
+			public bool IgnoreSceneInjection { get; }
 
 			public InjectableMonoBehaviour(Type monoBehaviourType, IEnumerable<FieldInfo> injectableFields)
 			{
+				IgnoreSceneInjection = monoBehaviourType.GetCustomAttribute<IgnoreSceneInjectionAttribute>() != null;
 				MonoBehaviourType = monoBehaviourType;
 				InjectableFields = injectableFields;
 			}
