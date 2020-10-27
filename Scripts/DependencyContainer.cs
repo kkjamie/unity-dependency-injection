@@ -124,13 +124,13 @@ namespace UnityDependencyInjection
 			handler?.HandleDependencyInjectionComplete();
 		}
 
-		public void InjectToSceneObjects()
+		public void InjectToSceneObjects(bool includeInactiveObjects = true)
 		{
 			foreach (var injectable in injectableMonoBehaviours)
 			{
 				if (injectable.IgnoreSceneInjection) continue;
 
-				var injectableObjects = Object.FindObjectsOfType(injectable.MonoBehaviourType);
+				var injectableObjects = Object.FindObjectsOfType(injectable.MonoBehaviourType, includeInactiveObjects);
 				foreach (var injectableObject in injectableObjects)
 				{
 					if (injectableObject.GetType() != injectable.MonoBehaviourType) continue;
