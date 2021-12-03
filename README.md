@@ -107,5 +107,6 @@ class Weapon
 }
 ```` 
 
-
+## Debugging
+Set the `EnableLogging` property to `true` to show what is getting injection to with what values.
 
