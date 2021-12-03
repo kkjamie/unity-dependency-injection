@@ -14,28 +14,29 @@ namespace UnityDependencyInjection
 
 	public class DependencyContainer : IDependencyProvider
 	{
-		private static readonly InjectableMonoBehaviour[] injectableMonoBehaviours;
+		private static readonly Dictionary<Type, InjectableTypeInfo> injectableTypes;
 
 		static DependencyContainer()
 		{
-			injectableMonoBehaviours = AppDomain.CurrentDomain.GetAssemblies()
+			// build up a cache of all injectable types
+			injectableTypes = AppDomain.CurrentDomain.GetAssemblies()
 				// Find all types
 				.SelectMany(a => a.GetTypes())
-				// that are subclasses of mono behaviours
-				.Where(t => t.IsSubclassOf(typeof(MonoBehaviour)))
 				// for each one return a new Injectable or null
 				.Select(t =>
 				{
 					// get all fields on this type that have [Inject] Attribute
-					var injectableFields = GetInjectableFields(t);
+					var injectableFields = InjectableTypeInfo.GetInjectableFields(t);
 					// if there are none, return null, otherwise create the new injectable object
 					if (!injectableFields.Any()) return null;
-					return new InjectableMonoBehaviour(t, injectableFields);
+					return new InjectableTypeInfo(t, injectableFields);
 				})
 				// filter out non injectable types
 				.Where(i => i != null)
-				.ToArray();
+				.ToDictionary(t => t.Type, t => t);
 		}
+
+		public bool EnableLogging { get; set; }
 
 		private readonly Dictionary<Type, object> dependencies = new Dictionary<Type, object>();
 
@@ -46,6 +47,8 @@ namespace UnityDependencyInjection
 
 		public void Add(object obj)
 		{
+			if (obj == null) throw new ArgumentNullException(nameof(obj));
+
 			var type = obj.GetType();
 
 			if (dependencies.ContainsKey(type))
@@ -89,6 +92,11 @@ namespace UnityDependencyInjection
 
 		public void SelfInject()
 		{
+			if (EnableLogging)
+			{
+				Log("Performing SelfInject()");
+			}
+
 			foreach (var dependency in dependencies.Values)
 			{
 				InjectTo(dependency);
@@ -97,91 +105,125 @@ namespace UnityDependencyInjection
 
 		public void InjectTo(params object[] targetObjects)
 		{
+			if (targetObjects == null) throw new ArgumentNullException(nameof(targetObjects));
+
 			foreach (var targetObject in targetObjects)
 			{
+				if (targetObject == null) throw new ArgumentNullException(nameof(targetObject));
+
 				InjectTo(targetObject);
 			}
 		}
 
 		public void InjectTo(object targetObject)
 		{
+			if (targetObject == null) throw new ArgumentNullException(nameof(targetObject));
+
 			var targetObjectType = targetObject.GetType();
-			var injectableFields = GetInjectableFields(targetObjectType);
+
+			if (!injectableTypes.TryGetValue(targetObjectType, out var injectableType)) return;
+
+			if (EnableLogging)
+			{
+				Log($"Performing InjectTo({targetObject})", targetObject);
+			}
+
+			var injectableFields = injectableType.InjectableFields;
 
 			foreach (var field in injectableFields)
 			{
 				var dependency = GetDependency(field.FieldType);
 				if (dependency == null)
 				{
-					Debug.LogWarning(
+					LogWarning(
 						$"Unmet dependency for {targetObjectType.Name}.{field.Name} ({field.FieldType})");
+				}
+				else if (EnableLogging)
+				{
+					Log($"Injecting to {targetObjectType}.{field.Name}; Type=({dependency.GetType().Name}) Value={dependency}({field.FieldType})",
+						dependency);
 				}
 
 				field.SetValue(targetObject, dependency);
 			}
 
-			var handler = targetObject as IDependencyInjectionCompleteHandler;
-			handler?.HandleDependencyInjectionComplete();
+			try
+			{
+				if (EnableLogging)
+				{
+					Log($"Completed injection to {targetObject}", targetObject);
+				}
+				var handler = targetObject as IDependencyInjectionCompleteHandler;
+				handler?.HandleDependencyInjectionComplete();
+			}
+			catch (Exception e)
+			{
+				LogError(e.Message);
+				LogError(e.StackTrace);
+			}
 		}
 
 		public void InjectToSceneObjects(bool includeInactiveObjects = true)
 		{
-			foreach (var injectable in injectableMonoBehaviours)
-			{
-				if (injectable.IgnoreSceneInjection) continue;
+			if (EnableLogging) Log($"Performing InjectToSceneObjects({includeInactiveObjects})");
 
-				var injectableObjects = Object.FindObjectsOfType(injectable.MonoBehaviourType, includeInactiveObjects);
+			foreach (var injectableTypeInfo in injectableTypes.Values)
+			{
+				if (!injectableTypeInfo.IsMonoBehaviour) continue;
+
+				var injectableObjects = Object.FindObjectsOfType(injectableTypeInfo.Type, includeInactiveObjects);
 				foreach (var injectableObject in injectableObjects)
 				{
-					if (injectableObject.GetType() != injectable.MonoBehaviourType) continue;
+					if (injectableTypeInfo.IgnoreSceneInjection) continue;
+
+					// We only want the exact type here, not subclasses
+					// - since we will also look for them later and we don't want double injections.
+					// - There's a potential optimization opportunity here: see the end of the function...
+					if (injectableObject.GetType() != injectableTypeInfo.Type) continue;
+
 					// Special case to stop re-injecting to things in the pool
 					if (dependencies.Values.Contains(injectableObject)) continue;
 
-					injectable.Inject(injectableObject, this);
-
-					var handler = injectableObject as IDependencyInjectionCompleteHandler;
-					handler?.HandleDependencyInjectionComplete();
+					InjectTo(injectableObject);
 				}
 			}
+
+			// OPTIMIZATION OPPORTUNITY:
+			// The algorithm will search the scene for all injectable types, extending from MonoBehaviour.
+			// If any injectables are inherited, that will result in multiple searches.
+			// Example:  `SubClass : BaseClass`
+			// even if subclass has no injected fields of it's own, it's included since it has injected fields in the base class.
+			// The guard in the above function stops us from performing multiple injections
+			// and we won't injection occur when iterating the BaseClass type.
+			// We currently only inject for exact type matches.
+
+			// The optimization opportunity: Detect inheritance hierarchies and cache them in the InjectableTypeInfo datastructure.
+			// When we search for injectables using Object.FindObjectsOfType - we only need to search for the base class
+			// as this will find any instances of any subclasses.
+			// When we found those instances we can use the InjectableTypeInfo object of the base type to traverse and find
+			// the InjectableTypeInfo representing the actual type and use that to inject. This will result in less "Find" calls.
 		}
 
 		public void InjectToGameObject(GameObject gameObject, bool includeChildren = true)
 		{
-			foreach (var injectable in injectableMonoBehaviours)
-			{
-				var type = injectable.MonoBehaviourType;
+			if (EnableLogging) Log($"Performing InjectToGameObject({gameObject}, {includeChildren})", gameObject);
 
-				var components = includeChildren ?
-					gameObject.GetComponentsInChildren(type) :
-					gameObject.GetComponents(type);
+			foreach (var injectable in injectableTypes.Values)
+			{
+				// OPTIMIZATION OPPORTUNITY: Same as the above function
+				var type = injectable.Type;
+
+				var components = includeChildren
+					? gameObject.GetComponentsInChildren(type)
+					: gameObject.GetComponents(type);
 
 				foreach (var injectableObject in components)
 				{
 					if (dependencies.Values.Contains(injectableObject)) continue;
 
-					injectable.Inject(injectableObject, this);
-
-					var handler = injectableObject as IDependencyInjectionCompleteHandler;
-					handler?.HandleDependencyInjectionComplete();
+					InjectTo(injectableObject);
 				}
 			}
-		}
-
-		public static IEnumerable<FieldInfo> GetInjectableFields(Type type)
-		{
-			const BindingFlags BINDING_FLAGS = BindingFlags.Instance | BindingFlags.NonPublic;
-
-			var fieldInfos = type.GetFields(BINDING_FLAGS).ToList();
-
-			var currentType = type;
-			while (currentType.BaseType != typeof(object))
-			{
-				if (currentType.BaseType == null) break;
-				fieldInfos.AddRange(currentType.BaseType.GetFields(BINDING_FLAGS));
-				currentType = currentType.BaseType;
-			}
-
-			return fieldInfos.Where(f => f.GetCustomAttribute<InjectAttribute>() != null);
 		}
 
 		public void Destroy()
@@ -195,35 +237,45 @@ namespace UnityDependencyInjection
 			dependencies.Clear();
 		}
 
-		private class InjectableMonoBehaviour
+		private static void Log(string value, object context = null) => Debug.Log($"[DependencyContainer]: {value}", context as Object);
+		private static void LogWarning(string value, object context = null) => Debug.LogWarning($"[DependencyContainer]: {value}", context as Object);
+		private static void LogError(string value, object context = null) => Debug.LogError($"[DependencyContainer]: {value}", context as Object);
+
+		private class InjectableTypeInfo
 		{
-			public Type MonoBehaviourType { get; private set; }
+			public bool IsMonoBehaviour { get; }
+			public Type Type { get; }
 			public IEnumerable<FieldInfo> InjectableFields { get; }
 			public bool IgnoreSceneInjection { get; }
 
-			public InjectableMonoBehaviour(Type monoBehaviourType, IEnumerable<FieldInfo> injectableFields)
+			public InjectableTypeInfo(Type type, IEnumerable<FieldInfo> injectableFields)
 			{
-				IgnoreSceneInjection = monoBehaviourType.GetCustomAttribute<IgnoreSceneInjectionAttribute>() != null;
-				MonoBehaviourType = monoBehaviourType;
+				IsMonoBehaviour = type.IsSubclassOf(typeof(MonoBehaviour));
+				IgnoreSceneInjection = type.GetCustomAttribute<IgnoreSceneInjectionAttribute>() != null;
+				Type = type;
 				InjectableFields = injectableFields;
-			}
-
-			public void Inject(object obj, IDependencyProvider container)
-			{
-				foreach (var field in InjectableFields)
-				{
-					var dependency = container.GetDependency(field.FieldType);
-					if (dependency == null)
-					{
-						Debug.LogWarning($"Unmet dependency for {MonoBehaviourType.Name}.{field.Name} ({field.FieldType})");
-					}
-					field.SetValue(obj, dependency);
-				}
 			}
 
 			public override string ToString()
 			{
-				return MonoBehaviourType.Name;
+				return Type.Name;
+			}
+
+			public static IEnumerable<FieldInfo> GetInjectableFields(Type type)
+			{
+				const BindingFlags BINDING_FLAGS = BindingFlags.Instance | BindingFlags.NonPublic;
+
+				var fieldInfos = type.GetFields(BINDING_FLAGS).ToList();
+
+				var currentType = type;
+				while (currentType.BaseType != typeof(object))
+				{
+					if (currentType.BaseType == null) break;
+					fieldInfos.AddRange(currentType.BaseType.GetFields(BINDING_FLAGS));
+					currentType = currentType.BaseType;
+				}
+
+				return fieldInfos.Where(f => f.GetCustomAttribute<InjectAttribute>() != null);
 			}
 		}
 	}
