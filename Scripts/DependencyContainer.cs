@@ -169,15 +169,15 @@ namespace UnityDependencyInjection
 
 		public static IEnumerable<FieldInfo> GetInjectableFields(Type type)
 		{
-			var bindingFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+			const BindingFlags BINDING_FLAGS = BindingFlags.Instance | BindingFlags.NonPublic;
 
-			var fieldInfos = type.GetFields(bindingFlags).ToList();
+			var fieldInfos = type.GetFields(BINDING_FLAGS).ToList();
 
 			var currentType = type;
 			while (currentType.BaseType != typeof(object))
 			{
 				if (currentType.BaseType == null) break;
-				fieldInfos.AddRange(currentType.BaseType.GetFields(bindingFlags));
+				fieldInfos.AddRange(currentType.BaseType.GetFields(BINDING_FLAGS));
 				currentType = currentType.BaseType;
 			}
 
