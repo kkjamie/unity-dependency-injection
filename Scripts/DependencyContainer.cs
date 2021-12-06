@@ -174,7 +174,17 @@ namespace UnityDependencyInjection
 				var injectableObjects = Object.FindObjectsOfType(injectableTypeInfo.Type, includeInactiveObjects);
 				foreach (var injectableObject in injectableObjects)
 				{
-					if (injectableTypeInfo.IgnoreSceneInjection) continue;
+					// Ignore scene injection
+					if (injectableTypeInfo.SceneInjectionControl == SceneInjectionControl.Ignore) continue;
+
+					// Ignore if the object is inactive
+					if (includeInactiveObjects &&
+					    injectableTypeInfo.SceneInjectionControl == SceneInjectionControl.OnlyWhenActive &&
+					    injectableObject is Component obj &&
+					    !obj.gameObject.activeInHierarchy)
+					{
+						continue;
+					}
 
 					// We only want the exact type here, not subclasses
 					// - since we will also look for them later and we don't want double injections.
@@ -246,12 +256,17 @@ namespace UnityDependencyInjection
 			public bool IsMonoBehaviour { get; }
 			public Type Type { get; }
 			public IEnumerable<FieldInfo> InjectableFields { get; }
-			public bool IgnoreSceneInjection { get; }
+			public SceneInjectionControl SceneInjectionControl { get; } = SceneInjectionControl.Always;
 
 			public InjectableTypeInfo(Type type, IEnumerable<FieldInfo> injectableFields)
 			{
 				IsMonoBehaviour = type.IsSubclassOf(typeof(MonoBehaviour));
-				IgnoreSceneInjection = type.GetCustomAttribute<IgnoreSceneInjectionAttribute>() != null;
+				var sceneInjectionControl = type.GetCustomAttribute<SceneInjectionOptions>();
+				if (sceneInjectionControl != null)
+				{
+					SceneInjectionControl = sceneInjectionControl.Control;
+				}
+
 				Type = type;
 				InjectableFields = injectableFields;
 			}
